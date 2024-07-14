@@ -34,33 +34,31 @@ def generate_rsa_key_pair(public_key_file, private_key_file):
 	with open(public_key_file, 'wb') as f:
 		f.write(public_key)
 		
-def rsa_encrypt_chunk(chunk, public_key):
+def rsa_encrypt_chunk(chunk_data):
+    chunk, public_key_bytes = chunk_data
+    public_key = RSA.import_key(public_key_bytes)  # Reconstruct the public key object
     cipher_rsa = PKCS1_OAEP.new(public_key)
     return cipher_rsa.encrypt(chunk)
 
 def rsa_encrypt_file(aes_encrypted_file, rsa_encrypted_file, public_key_file):
     with open(public_key_file, 'rb') as f:
-        public_key = RSA.import_key(f.read())
+        public_key_bytes = f.read()  # Read the public key as bytes
     
     original_extension = path.splitext(aes_encrypted_file)[1]
 
     with open(aes_encrypted_file, 'rb') as f:
         aes_encrypted_data = f.read()
     
-    chunk_size = public_key.size_in_bytes() - 42  # Adjust for PKCS1_OAEP padding
-    total_chunks = ceil(len(aes_encrypted_data) / chunk_size)
+    chunk_size = RSA.import_key(public_key_bytes).size_in_bytes() - 42  # Adjust for PKCS1_OAEP padding
+    chunks = [(aes_encrypted_data[i:i+chunk_size], public_key_bytes) for i in range(0, len(aes_encrypted_data), chunk_size)]
+    
+    with Pool(cpu_count()) as pool:
+        encrypted_chunks = list(tqdm(pool.imap(rsa_encrypt_chunk, chunks), total=len(chunks), desc="Encrypting with RSA by chunk", unit="chunk"))
 
-    with tqdm(total=total_chunks, desc="Encrypting with RSA by chunk", unit="chunk") as pbar:
-        encrypted_data = bytearray()
-        for i in range(0, len(aes_encrypted_data), chunk_size):
-            chunk = aes_encrypted_data[i:i+chunk_size]
-            encrypted_chunk = rsa_encrypt_chunk(chunk, public_key)
-            encrypted_data.extend(encrypted_chunk)
-            pbar.update(1)
-    
     with open(rsa_encrypted_file + original_extension, 'wb') as f:
-        f.write(encrypted_data)
-    
+        for chunk in encrypted_chunks:
+            f.write(chunk)
+
     return rsa_encrypted_file + original_extension
 	
 def get_file_seed(file_path):
